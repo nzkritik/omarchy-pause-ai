@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "nzkritik.pause-ai",
+  "name": "Pause AI",
+  "version": "0.1.0",
+  "author": "nzkritik",
+  "license": "MIT",
+  "description": "Freeze every AI agent CLI (Claude Code, Codex, Gemini, OpenCode...) from the bar, indefinitely or for a set time, and resume them exactly where they were.",
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Pause AI",
+    "description": "Left click pauses or resumes all AI agents; right click pauses them for a set time",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "extraAgents": ""
+    },
+    "schema": [
+      {
+        "key": "extraAgents",
+        "type": "string",
+        "label": "Extra agent commands",
+        "description": "Space-separated command names to treat as agents too, on top of claude, codex, gemini, opencode, cursor-agent, crush, aider, goose, amp, qwen and copilot.",
+        "defaultValue": ""
+      }
+    ]
+  }
+}

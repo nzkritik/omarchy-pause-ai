@@ -1,0 +1,359 @@
+#!/usr/bin/python3 -I
+"""Freeze and thaw AI agent CLIs (Claude Code, Codex, Gemini, ...).
+
+  pause-ai scan                    what is running, as JSON
+  pause-ai pause [--until EPOCH]   freeze every agent; repeat to catch new ones
+  pause-ai resume                  thaw everything this tool froze
+  pause-ai status                  the pause state, as JSON
+
+Extra agent names can follow any command as --name NAME (repeatable).
+--state-dir DIR keeps the state elsewhere (tests); it must be a private
+directory owned by this user, like the default.
+
+How a pause works. An agent is a process whose name, executable, or script
+is one of the agent names below, owned by this user. Its whole process tree
+is frozen with SIGSTOP, so the tools it is running (builds, shells, MCP
+servers) stop with it. When the agent was started from an interactive shell,
+that shell is frozen FIRST and thawed LAST: otherwise the shell sees its
+foreground job stop, prints "Stopped", takes the terminal back, and the
+agent stays stopped in the background after it is continued.
+
+Everything frozen is recorded with its start time in a state file under the
+user's runtime directory, and only those exact processes are ever thawed.
+Processes that were already stopped (Ctrl-Z, a debugger) are left alone and
+never recorded, so a resume cannot wake them. Nothing here needs, or will
+run with, elevated privileges.
+"""
+
+import json
+import os
+import re
+import signal
+import stat
+import sys
+import tempfile
+import time
+
+AGENTS = {
+    "claude", "codex", "gemini", "opencode", "cursor-agent", "crush",
+    "aider", "goose", "amp", "qwen", "copilot",
+}
+# Script agents run under an interpreter: match the script, not the runtime.
+INTERPRETERS = re.compile(r"^(node|nodejs|bun|deno|python[0-9.]*|pypy[0-9.]*)$")
+SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "mksh", "tcsh", "nu", "xonsh", "elvish"}
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+STATE_MAX = 1 << 20
+EMPTY = {"paused": False, "frozen": [], "until": None, "since": None}
+STATE_DIR = None        # set by --state-dir
+
+
+def die(msg, code=2):
+    print(json.dumps({"error": msg}))
+    sys.exit(code)
+
+
+# -- /proc ----------------------------------------------------------------------
+
+def read_bounded(path, limit=65536):
+    """Read at most `limit` bytes without following a link or blocking."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        return os.read(fd, limit)
+    finally:
+        os.close(fd)
+
+
+class Proc:
+    __slots__ = ("pid", "ppid", "state", "start", "comm", "argv", "exe", "uid")
+
+    @classmethod
+    def load(cls, pid):
+        base = f"/proc/{pid}"
+        try:
+            st = os.stat(base)
+            raw = read_bounded(f"{base}/stat").decode(errors="replace")
+        except OSError:
+            return None
+        p = cls()
+        p.pid, p.uid = pid, st.st_uid
+        # comm may hold spaces or parentheses: it runs to the LAST ')'
+        close = raw.rfind(")")
+        p.comm = raw[raw.find("(") + 1:close]
+        fields = raw[close + 2:].split()
+        p.state, p.ppid, p.start = fields[0], int(fields[1]), int(fields[19])
+        try:
+            p.argv = [a.decode(errors="replace") for a in
+                      read_bounded(f"{base}/cmdline", 16384).split(b"\0") if a]
+        except OSError:
+            p.argv = []
+        try:
+            p.exe = os.path.basename(os.readlink(f"{base}/exe")).removesuffix(" (deleted)")
+        except OSError:
+            p.exe = ""
+        return p
+
+
+def processes():
+    out = {}
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            p = Proc.load(int(name))
+            if p:
+                out[p.pid] = p
+    return out
+
+
+def agent_name(p, names):
+    """The agent this process is, or None."""
+    if p.comm in names or p.exe in names:
+        return p.comm if p.comm in names else p.exe
+    if p.argv:
+        first = os.path.basename(p.argv[0])
+        if first in names:
+            return first
+        if INTERPRETERS.match(first) or INTERPRETERS.match(p.exe):
+            for arg in p.argv[1:3]:            # node [flags] /path/to/gemini ...
+                if arg.startswith("-"):
+                    continue
+                script = os.path.basename(arg)
+                return script if script in names else None
+    return None
+
+
+def ancestors(procs, pid):
+    seen = set()
+    while pid in procs and pid not in seen and pid > 1:
+        seen.add(pid)
+        pid = procs[pid].ppid
+    return seen
+
+
+# -- state ------------------------------------------------------------------------
+
+def private_dir(path):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        die(f"{path} does not exist")
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        die(f"{path} is not a private directory owned by this user")
+
+
+def state_dir():
+    """This user's private runtime directory, never taken from the environment."""
+    if STATE_DIR:
+        private_dir(STATE_DIR)
+        return STATE_DIR
+    uid = os.getuid()
+    base = f"/run/user/{uid}"
+    private_dir(base)
+    d = f"{base}/nzkritik.pause-ai"
+    try:
+        os.mkdir(d, 0o700)
+    except FileExistsError:
+        pass
+    private_dir(d)
+    return d
+
+
+def load_state():
+    path = f"{state_dir()}/state.json"
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return dict(EMPTY, frozen=[])
+    if not stat.S_ISREG(st.st_mode) or st.st_size > STATE_MAX:
+        die("the state file is not a regular file of sane size")
+    try:
+        data = json.loads(read_bounded(path, STATE_MAX))
+        frozen = [e for e in data.get("frozen", [])
+                  if isinstance(e, dict) and isinstance(e.get("pid"), int)
+                  and isinstance(e.get("start"), int)]
+        until = data.get("until")
+        since = data.get("since")
+        return {"paused": data.get("paused") is True or bool(frozen),
+                "frozen": frozen,
+                "until": until if isinstance(until, (int, float)) else None,
+                "since": since if isinstance(since, (int, float)) else None}
+    except (OSError, ValueError, AttributeError):
+        return dict(EMPTY, frozen=[])
+
+
+def save_state(state):
+    d = state_dir()
+    path = f"{d}/state.json"
+    if not state.get("paused") and not state["frozen"]:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        return
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".state.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(state, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)         # rename: a link planted at `path` is replaced, not followed
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+# -- the work ---------------------------------------------------------------------
+
+def find_agents(procs, names):
+    """{pid: agent name} for this user's agents, minus our own ancestry."""
+    uid, mine = os.getuid(), ancestors(procs, os.getpid())
+    return {p.pid: n for p in procs.values()
+            if p.uid == uid and p.pid not in mine and p.state not in "ZX"
+            and (n := agent_name(p, names))}
+
+
+def children_of(procs):
+    kids = {}
+    for p in procs.values():
+        kids.setdefault(p.ppid, []).append(p.pid)
+    return kids
+
+
+def scan(names):
+    procs = processes()
+    agents = find_agents(procs, names)
+    kids = children_of(procs)
+    rows = []
+    for pid, name in sorted(agents.items()):
+        if procs[pid].ppid in agents:
+            continue                      # a sub-agent: counted with its parent
+        tree, todo = 0, list(kids.get(pid, []))
+        while todo:
+            c = todo.pop()
+            tree += 1
+            todo.extend(kids.get(c, []))
+        rows.append({"pid": pid, "name": name, "state": procs[pid].state,
+                     "stopped": procs[pid].state in "Tt", "children": tree})
+    return rows
+
+
+def freeze(names):
+    """Freeze agents and their trees; returns how many processes were frozen now."""
+    state = load_state()
+    have = {(e["pid"], e["start"]) for e in state["frozen"]}
+    uid = os.getuid()
+    frozen_now = 0
+
+    def stop(p, role, name=""):
+        nonlocal frozen_now
+        if (p.pid, p.start) in have or p.uid != uid or p.state in "TtZX":
+            return
+        try:
+            os.kill(p.pid, signal.SIGSTOP)
+        except (ProcessLookupError, PermissionError):
+            return
+        have.add((p.pid, p.start))
+        state["frozen"].append({"pid": p.pid, "start": p.start, "role": role, "name": name or p.comm})
+        frozen_now += 1
+
+    # Sweep until nothing new turns up: a child forked between the listing
+    # and the parent's stop is caught on the next pass.
+    for _ in range(5):
+        before = frozen_now
+        procs = processes()
+        agents = find_agents(procs, names)
+        mine = ancestors(procs, os.getpid())
+        kids = children_of(procs)
+        for pid, name in agents.items():
+            parent = procs.get(procs[pid].ppid)
+            if parent and parent.comm in SHELLS and parent.pid not in mine and parent.pid not in agents:
+                stop(parent, "shell")          # before the agent: see the module doc
+        for pid, name in agents.items():
+            stop(procs[pid], "agent", name)
+            todo = list(kids.get(pid, []))
+            while todo:
+                c = todo.pop()
+                if c in procs and c not in mine:
+                    stop(procs[c], "child")
+                    todo.extend(kids.get(c, []))
+        if frozen_now == before:
+            break
+        time.sleep(0.05)
+    return state, frozen_now
+
+
+def thaw():
+    """Continue exactly what was frozen, newest first so shells go last."""
+    state = load_state()
+    thawed = 0
+    for e in reversed(state["frozen"]):
+        p = Proc.load(e["pid"])
+        if not p or p.start != e["start"]:
+            continue                        # gone, or the pid was reused
+        try:
+            os.kill(p.pid, signal.SIGCONT)
+            thawed += 1
+        except (ProcessLookupError, PermissionError):
+            pass
+    save_state(dict(EMPTY, frozen=[]))
+    return thawed
+
+
+def status(names):
+    state = load_state()
+    alive = 0
+    for e in state["frozen"]:
+        p = Proc.load(e["pid"])
+        if p and p.start == e["start"]:
+            alive += 1
+    agents = scan(names)
+    return {"paused": state["paused"],
+            "until": state["until"], "since": state["since"], "frozen": alive,
+            "agents": agents}
+
+
+def main(argv):
+    global STATE_DIR
+    if os.geteuid() == 0:
+        die("refusing to run as root")
+    names = set(AGENTS)
+    args, until, cmd = list(argv), None, None
+    while args:
+        a = args.pop(0)
+        if a == "--name" and args:
+            n = args.pop(0)
+            if NAME_RE.match(n):
+                names.add(n)
+        elif a == "--state-dir" and args:
+            STATE_DIR = args.pop(0)
+        elif a == "--until" and args:
+            try:
+                until = float(args.pop(0))
+            except ValueError:
+                die("--until needs a unix time")
+        elif cmd is None and a in ("scan", "pause", "resume", "status"):
+            cmd = a
+        else:
+            die(f"unknown argument {a!r}")
+    if cmd == "scan":
+        print(json.dumps({"agents": scan(names)}))
+    elif cmd == "pause":
+        state, now = freeze(names)
+        state["paused"] = True
+        if until is not None:
+            state["until"] = until
+        state["since"] = state.get("since") or time.time()
+        save_state(state)
+        print(json.dumps({"frozen_now": now, "frozen_total": len(state["frozen"]),
+                          "until": state["until"]}))
+    elif cmd == "resume":
+        print(json.dumps({"thawed": thaw()}))
+    elif cmd == "status":
+        print(json.dumps(status(names)))
+    else:
+        die("usage: pause-ai scan|pause [--until EPOCH]|resume|status [--name NAME]...")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
