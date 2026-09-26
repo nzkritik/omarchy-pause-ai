@@ -42,21 +42,24 @@ Omarchy with the Quickshell bar, and `python3` (in Omarchy's base install).
 ## Install
 
 ```bash
+omarchy plugin add https://github.com/nzkritik/omarchy-pause-ai --enable
+```
+
+or by hand:
+
+```bash
 git clone https://github.com/nzkritik/omarchy-pause-ai ~/.config/omarchy/plugins/nzkritik.pause-ai
-omarchy bar put nzkritik.pause-ai
+omarchy plugin enable nzkritik.pause-ai
 ```
 
 ## Remove
 
-```bash
-omarchy-shell nzkritik.pause-ai resume     # if anything is paused
-omarchy bar remove nzkritik.pause-ai 2>/dev/null || true
-rm -rf ~/.config/omarchy/plugins/nzkritik.pause-ai
-omarchy restart shell
-```
+Resume anything that is paused first, then remove the plugin:
 
-If `omarchy bar` has no `remove` on your version, delete the
-`nzkritik.pause-ai` entry from `~/.config/omarchy/shell.json` instead.
+```bash
+omarchy-shell nzkritik.pause-ai resume
+omarchy plugin remove nzkritik.pause-ai
+```
 
 ## Settings
 
