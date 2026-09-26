@@ -4,6 +4,8 @@ An Omarchy bar button that freezes every AI agent CLI on your machine
 (Claude Code, Codex, Gemini CLI, OpenCode, Cursor Agent, Crush, Aider,
 Goose, Amp, Qwen Code, Copilot CLI) and resumes them exactly where they were.
 
+![The Pause AI panel: timed pause presets and the agents it can see](preview.png)
+
 - **Left click** pauses all agents until you click again.
 - **Right click** opens a panel: pause for 5, 10, 15 or 30 minutes, an hour,
   or until resumed; resume now; and the agents it can see.
