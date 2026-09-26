@@ -82,8 +82,14 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
 
-    contentWidth: Style.space(340)
-    contentHeight: body.implicitHeight + Style.space(28)
+    // Sized to what is in it. contentWidth/contentHeight are the whole card,
+    // padding and border included, so the fitting helpers add the inset.
+    // The width follows the widest row that cannot wrap (the preset buttons,
+    // an agent line); the wrapping text below opts out of driving it.
+    contentWidth: panel.fittedContentWidth(
+        Math.max(Style.space(300), body.implicitWidth) + panel.padding * 2 + Style.space(2),
+        Style.space(480))
+    contentHeight: panel.fittedContentHeight(body.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -93,8 +99,9 @@ Panel {
 
     ColumnLayout {
       id: body
-      anchors.fill: parent
-      anchors.margins: Style.space(14)
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
       spacing: Style.space(10)
 
       RowLayout {
@@ -119,6 +126,7 @@ Panel {
 
       Text {
         Layout.fillWidth: true
+        Layout.preferredWidth: 0          // wraps to the panel; never widens it
         textFormat: Text.PlainText
         text: root.headline
         color: root.paused ? Color.accent : root.foreground
@@ -144,8 +152,14 @@ Panel {
       }
 
       GridLayout {
+        id: presetGrid
+        // Equal columns, each wide enough for the longest label with its
+        // padding; the panel's width follows from this.
+        property real widest: 0
         Layout.fillWidth: true
+        Layout.minimumWidth: widest * columns + columnSpacing * (columns - 1)
         columns: 3
+        uniformCellWidths: true
         columnSpacing: Style.space(6)
         rowSpacing: Style.space(6)
         Repeater {
@@ -153,6 +167,8 @@ Panel {
           Button {
             required property var modelData
             Layout.fillWidth: true
+            onImplicitWidthChanged: presetGrid.widest = Math.max(presetGrid.widest, implicitWidth)
+            Component.onCompleted: presetGrid.widest = Math.max(presetGrid.widest, implicitWidth)
             text: modelData.label
             bordered: true
             onClicked: root.pauseFor(modelData.minutes)
@@ -197,6 +213,7 @@ Panel {
 
       Text {
         Layout.fillWidth: true
+        Layout.preferredWidth: 0          // wraps to the panel; never widens it
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
         text: "Agents are frozen where they are, with everything they started, and pick up "
