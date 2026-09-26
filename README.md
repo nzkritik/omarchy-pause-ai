@@ -71,12 +71,8 @@ Omarchy with the Quickshell bar, and `python3` (in Omarchy's base install).
 omarchy plugin add https://github.com/nzkritik/omarchy-pause-ai --enable
 ```
 
-or by hand:
-
-```bash
-git clone https://github.com/nzkritik/omarchy-pause-ai ~/.config/omarchy/plugins/nzkritik.pause-ai
-omarchy plugin enable nzkritik.pause-ai
-```
+That puts the Pause AI button on the bar. To place it elsewhere, use
+`omarchy bar move nzkritik.pause-ai --section <left|center|right>`.
 
 ## Remove
 
