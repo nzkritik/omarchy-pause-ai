@@ -20,6 +20,8 @@ agent stays stopped in the background after it is continued.
 
 Everything frozen is recorded with its start time in a state file under the
 user's runtime directory, and only those exact processes are ever thawed.
+Every signal goes through a pidfd checked against that start time, so a
+process id recycled in between can never be signalled.
 Processes that were already stopped (Ctrl-Z, a debugger) are left alone and
 never recorded, so a resume cannot wake them. Nothing here needs, or will
 run with, elevated privileges.
@@ -118,6 +120,30 @@ def agent_name(p, names):
                 script = os.path.basename(arg)
                 return script if script in names else None
     return None
+
+
+def signal_exact(pid, start, sig):
+    """Signal `pid` only while it is still the process that started at `start`.
+
+    The pidfd is opened first and pins that process: it can never come to
+    refer to another one. So a start time read after opening it, and found
+    equal, proves the pidfd holds the right process, and the signal sent
+    through it cannot reach a process that has since taken over the pid.
+    """
+    try:
+        fd = os.pidfd_open(pid)
+    except OSError:
+        return False                        # already gone
+    try:
+        p = Proc.load(pid)
+        if not p or p.start != start or p.uid != os.getuid():
+            return False
+        signal.pidfd_send_signal(fd, sig)
+        return True
+    except OSError:                         # exited meanwhile, or not ours
+        return False
+    finally:
+        os.close(fd)
 
 
 def ancestors(procs, pid):
@@ -249,9 +275,7 @@ def freeze(names):
         nonlocal frozen_now
         if (p.pid, p.start) in have or p.uid != uid or p.state in "TtZX":
             return
-        try:
-            os.kill(p.pid, signal.SIGSTOP)
-        except (ProcessLookupError, PermissionError):
+        if not signal_exact(p.pid, p.start, signal.SIGSTOP):
             return
         have.add((p.pid, p.start))
         state["frozen"].append({"pid": p.pid, "start": p.start, "role": role, "name": name or p.comm})
@@ -288,14 +312,8 @@ def thaw():
     state = load_state()
     thawed = 0
     for e in reversed(state["frozen"]):
-        p = Proc.load(e["pid"])
-        if not p or p.start != e["start"]:
-            continue                        # gone, or the pid was reused
-        try:
-            os.kill(p.pid, signal.SIGCONT)
-            thawed += 1
-        except (ProcessLookupError, PermissionError):
-            pass
+        if signal_exact(e["pid"], e["start"], signal.SIGCONT):
+            thawed += 1                     # gone, or a reused pid, is skipped
     save_state(dict(EMPTY, frozen=[]))
     return thawed
 
