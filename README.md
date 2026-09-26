@@ -13,6 +13,30 @@ Goose, Amp, Qwen Code, Copilot CLI) and resumes them exactly where they were.
 While paused the icon turns into a pause sign and the tooltip counts down.
 Agents that start during a pause are frozen too, within a few seconds.
 
+## Example: pausing OpenCode for five minutes
+
+![OpenCode frozen mid-session, with the Pause AI panel counting down](docs/opencode-paused.png)
+
+OpenCode is running in a terminal. To step away without it carrying on:
+
+1. **Right click** the sparkle icon in the bar and choose **5 min**.
+2. The icon turns into a pause sign. OpenCode, and anything it had started,
+   stops where it is: no more tool calls, no more requests to the model.
+3. Right click again to see the countdown (*Paused — resumes in 3:55*), the
+   agent listed as **paused**, and the choice to **Resume now** or change the
+   pause.
+4. When the time is up, or on **Resume now**, OpenCode carries on from exactly
+   the same point, still in the foreground of its terminal.
+
+A left click does the same without a time limit: click once to pause, again
+to resume. The same pause from a script or a key binding:
+
+```bash
+omarchy-shell nzkritik.pause-ai pause 5    # minutes; 0 = until resumed
+omarchy-shell nzkritik.pause-ai status     # {"paused":true,"until":…,"remaining":235,…}
+omarchy-shell nzkritik.pause-ai resume
+```
+
 ## How it works
 
 Pausing sends `SIGSTOP` to each agent **and everything it started** (shells,
