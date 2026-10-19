@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // `Panel` owns only the open/close state. The visible surface is the
@@ -19,7 +20,7 @@ Panel {
   property var hostWidget: null
   property var service: null
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.5)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool paused: service ? service.paused : false
@@ -129,7 +130,7 @@ Panel {
         Layout.preferredWidth: 0          // wraps to the panel; never widens it
         textFormat: Text.PlainText
         text: root.headline
-        color: root.paused ? Color.accent : root.foreground
+        color: root.paused ? Commons.Color.accent : root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.space(14)
         wrapMode: Text.Wrap
@@ -204,7 +205,7 @@ Panel {
           Text {
             textFormat: Text.PlainText
             text: modelData.stopped ? "paused" : "running"
-            color: modelData.stopped ? Color.accent : root.dim
+            color: modelData.stopped ? Commons.Color.accent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.space(11)
           }

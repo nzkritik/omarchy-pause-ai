@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Left click: pause every AI agent until resumed, or resume.
@@ -11,8 +12,8 @@ BarWidget {
 
   readonly property var shell: bar && bar.shell ? bar.shell : null
   readonly property var svc: shell ? shell.serviceFor(moduleName) : null
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
 
   readonly property bool paused: svc ? svc.paused : false
   readonly property int running: svc ? svc.running : 0
@@ -22,7 +23,7 @@ BarWidget {
   readonly property string glyph: paused ? "\u{F03E4}" : "\u{F0674}"
   readonly property color glyphColor: {
     if (!svc || svc.lastError !== "") return urgent
-    if (paused) return Color.accent
+    if (paused) return Commons.Color.accent
     return running > 0 ? foreground : Qt.darker(foreground, 1.6)
   }
 
