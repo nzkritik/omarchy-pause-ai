@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nzkritik.pause-ai",
   "name": "Pause AI",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "nzkritik",
   "license": "MIT",
   "description": "Freeze every AI agent CLI (Claude Code, Codex, Gemini, OpenCode...) from the bar, indefinitely or for a set time, and resume them exactly where they were.",
